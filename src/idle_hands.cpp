@@ -7,66 +7,68 @@
 
 using namespace v8;
 
-bool running = false;
 Persistent<Function> cb;
 uv_idle_t idler;
 
 /**
  * callback for idle watcher
  **/
-void idle_event(uv_idle_t* handle, int status) {
-	const unsigned argc = 1;
-	Local<Value> argv[argc] = {Local<Value>::New(Number::New(status))};
-	cb->Call(Context::GetCurrent()->Global(), argc, argv);
+void idle_event(uv_idle_t* handle) {
+    const unsigned argc = 1;
+    Isolate* isolate = Isolate::GetCurrent();
+    Local<Value> argv[argc] = {};
+    Local<Function> callback = Local<Function>::New(isolate, cb);
+    callback->Call(isolate->GetCurrentContext()->Global(), argc, argv);
 }
 
 /**
  * start idle watcher
  * usage: start(js_callback)
  **/
-Handle<Value> start(const Arguments& args) {
-	HandleScope scope;
+void start(const FunctionCallbackInfo<Value>& args) {
+    Isolate* isolate = Isolate::GetCurrent();
+    HandleScope scope(isolate);
 
-	if (!args.Length() || !args[0]->IsFunction()) {
-		return ThrowException(Exception::TypeError(String::New("First argument must be a function")));
-	}
+    if (!args.Length() || !args[0]->IsFunction()) {
+        isolate->ThrowException(Exception::TypeError(String::NewFromUtf8(
+            isolate, "First argument must be a function")));
+        return;
+    }
 
-	// Don't start if already running
-	if (running) {
-		return ThrowException(Exception::TypeError(String::New("Already started")));
-	}
-	running = true;
+    // Don't start if already running
+    if (!cb.IsEmpty()) {
+        isolate->ThrowException(Exception::TypeError(String::NewFromUtf8(
+            isolate, "Already started")));
+        return;
+    }
 
-	cb = Persistent<Function>::New(Handle<Function>::Cast(args[0]));
+    cb.Reset(isolate, Local<Function>::Cast(args[0]));
 
-	uv_idle_init(uv_default_loop(), &idler);
-	uv_idle_start(&idler, idle_event);
-
-	return scope.Close(Undefined());
+    uv_idle_init(uv_default_loop(), &idler);
+    uv_idle_start(&idler, idle_event);
 }
 
 /**
  * stop idle watcher
  **/
-Handle<Value> stop(const Arguments& args) {
-	HandleScope scope;
+void stop(const FunctionCallbackInfo<Value>& args) {
+    Isolate* isolate = Isolate::GetCurrent();
+    HandleScope scope(isolate);
 
-	if (!running) {
-		return ThrowException(Exception::TypeError(String::New("Already stopped")));
-	}
-	running = false;
+    if (cb.IsEmpty()) {
+        isolate->ThrowException(Exception::TypeError(String::NewFromUtf8(
+            isolate, "Already stopped")));
+        return;
+    }
 
-	uv_idle_stop(&idler);
+    cb.Reset();
 
-	return scope.Close(Undefined());
+    uv_idle_stop(&idler);
 }
 
-void Init(Handle<Object> target) {
-  target->Set(String::NewSymbol("start"),
-      FunctionTemplate::New(start)->GetFunction());
-
-  target->Set(String::NewSymbol("stop"),
-      FunctionTemplate::New(stop)->GetFunction());
+void Init(Handle<Object> exports) {
+    NODE_SET_METHOD(exports, "start", start);
+    NODE_SET_METHOD(exports, "stop", stop);
 }
 
 NODE_MODULE(idle_hands, Init)
